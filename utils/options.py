@@ -58,7 +58,7 @@ def define_arguments(parser):
     parser.add_argument("--debug", action="store_true", help="for debug")
     parser.add_argument("--colab_viet", action="store_true", help="util for run on colab")
 
-    parser.add_argument('--datasetname',  type=str, choices=['MAVEN', 'ACE', 'ACE_lifelong'], default='MAVEN')
+    parser.add_argument('--datasetname',  type=str, choices=['MAVEN', 'ACE', 'RAMS', 'GENEVA','ACE_lifelong'], default='MAVEN')
     parser.add_argument("--center-ratio", type=int, default=1, help="The number points that near to the center")
     parser.add_argument("--generate_ratio", type=int, default=20, help="The ratio between replay set and generated set")
     parser.add_argument("--naloss_ratio", type=int, default=4, help="")

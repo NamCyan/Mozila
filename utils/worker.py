@@ -173,6 +173,9 @@ class Worker(object):
             if optimizer is None:
                 raise ValueError("training requires valid optimizer")
         else:
+            if opts.test_only:
+                self.balance_na = 1
+                model.balance_na = self.balance_na
             model.eval()
         epoch_loss = Record()
         epoch_metric = Record(True)

@@ -272,26 +272,46 @@ def get_stage_loaders(root:str,
     print(streams)
     dataset_id = 0 if "dataset" not in kwargs else kwargs['dataset']
     all_features = {}
-    if opts.datasetname == "MAVEN":
-        out = h5py.File(os.path.join(root, "features/data.h5"), "r")
-    else:
-        out = h5py.File(os.path.join(root, "ace_features/data.h5"), "r")
-    print(opts.datasetname == "MAVEN")
+    out = h5py.File(os.path.join(root, f"{opts.datasetname}/data.h5"), "r")
+
+    # if opts.datasetname == "MAVEN":
+    #     out = h5py.File(os.path.join(root, "features/data.h5"), "r")
+    # elif opts.datasetname == "RAMS":
+    #     out = h5py.File(os.path.join(root, "RAMS/data.h5"), "r")
+    # elif opts.datasetname == "GENEVA":
+    #     out = h5py.File(os.path.join(root, "GENEVA/data.h5"), "r")
+    # else:
+    #     out = h5py.File(os.path.join(root, "ace_features/data.h5"), "r")
+    # print(opts.datasetname == "MAVEN")
     def prepare_dataset(instances:List[Dict]) -> List[Instance]:
         #instances = instances[:10000]
         def load_file(add):
-            path, span, mention_id, sent_id  = add
+            span, mention_id, sent_id  = add
             if mention_id in all_features:
                 return all_features[mention_id]
-            if not path.endswith("npy"):
-                path += ".npy"
+            # if not path.endswith("npy"):
+            #     path += ".npy"
             #with open(path, "rb") as f:
             #    npy_features = np.load(f)
-            if opts.datasetname == "MAVEN":
+            if opts.datasetname in ["RAMS", "GENEVA"]:
+                if not opts.llm2vec:
+                    split = None
+                    for split_check in ["train", "dev", "test"]:
+                        if sent_id in out["data"]["features"][split_check]:
+                            split = split_check
+                            break
+                    if split:
+                        npy_features = out["data"]["features"][split][sent_id][:]
+                    else:
+                        raise(f"Can not find features for {sent_id}")
+                else:
+                    npy_features = out["data_llm2vec"]["features"][sent_id][:]
+            elif opts.datasetname == "MAVEN":
                 if not opts.llm2vec:
                     npy_features = out["data"]["features"][sent_id][:]
                 else:
                     npy_features = out["data_llm2vec"]["features"][sent_id][:]
+            
             else:
                 if not opts.llm2vec:
                     npy_features = out["data"]["ace_features_lifelong"][sent_id][:]
@@ -300,16 +320,17 @@ def get_stage_loaders(root:str,
             try:
                 npy_features = npy_features[span, :]
             except Exception as e:
-                print(npy_features)
-                print(npy_features.shape)
-                print(add)
+                # print(npy_features)
+                # print(npy_features.shape)
+                # print(add)
                 raise(e)
             
             features = torch.from_numpy(npy_features).float().flatten()
             all_features[mention_id] = features
             return features
         
-        paths = [(collection.feature_path(i["feature_path"]), i["span"], i["mention_id"], i["sentence_id"]) for i in instances]
+        paths = [(i["span"], i["mention_id"], i["sentence_id"]) for i in instances]
+
         features = [load_file(i) for i in tqdm(paths)]
 
         #for test
@@ -323,7 +344,7 @@ def get_stage_loaders(root:str,
             sentence_id=instance["sentence_id"],
             mention_id=instance["mention_id"],
             label=collection.label2id[instance["label"]]
-        ) for instance, path in tqdm(zip(instances, paths))]
+        ) for instance in tqdm(instances)]
         return instances
 
 
@@ -391,7 +412,7 @@ def get_stage_loaders(root:str,
     instances = collection.collect_instance_by_labels(labels, dataset=collection.datasets[dataset_id])
     print(f'Original len dev instances: {len(instances["dev"])}')
     print(f'Original len test instances: {len(instances["test"])}')
-        # huydq --
+
     
         
     instances_dev = prepare_dataset(instances["dev"][:])
@@ -496,7 +517,16 @@ def get_stage_loaders_n(root:str,
     return loaders + [dev_loader, test_loader], exclude_none_loaders, stages, collection.label2id
 
 def test():
-    l = get_stage_loaders(root="./data/", feature_root="/scratch/pengfei4/LInEx/data", batch_size=2, num_steps=5, episode_num_classes=4, episode_num_instances=3, episode_num_novel_classes=2, evaluation_num_instances=6)
+    perm_id =0
+    dataset_id=0
+    streams = json.load(open(opts.stream_file))
+    streams = [streams[t] for t in PERM[perm_id]]
+    loaders, exemplar_loaders, stage_labels, label2id = get_stage_loaders(root=opts.json_root,
+        feature_root=opts.feature_root,
+        batch_size=opts.batch_size,
+        streams=streams,
+        num_workers=0,
+        dataset=dataset_id)
 
 if __name__ == "__main__":
     test()
