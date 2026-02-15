@@ -2,7 +2,7 @@ import torch
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.dataset import TensorDataset
 import numpy as np
-import json
+import json, jsonlines
 import os
 from tqdm import tqdm
 from time import time
@@ -66,7 +66,8 @@ def main():
 
     dataset_id = 0
 
-    os.makedirs(opts.load_model, exist_ok=True)
+    if not opts.test_only:
+        os.makedirs(opts.load_model, exist_ok=True)
 
     loss_file_path = os.path.join(opts.log_dir, "LOSS_LOG.txt")
     loss_file = open(loss_file_path, 'a')
@@ -200,12 +201,9 @@ def main():
                 epoch_time= time2 - time1
                 
                 total_epoch += 1
-                # if opts.debug:
-                #     import pdb
-                #     pdb.set_trace()
                 for output_log in [print, worker._log]:
                     output_log(
-                        f"Epoch {worker.epoch:3d}  Train Loss {epoch_loss} {epoch_metric} Time {epoch_time:.3f}s")
+                        f"Epoch {worker.epoch:3d} Train Loss {epoch_loss} {epoch_metric} Time {epoch_time:.3f}s")
         else:
             learned_labels = set([t for stream in stage_labels for t in stream])
             termination = True
@@ -244,23 +242,65 @@ def main():
             output_log(
                 f"Epoch {worker.epoch:3d}:  Dev {dev_metrics}"
             )
-        # if worker.epoch == opts.train_epoch:
-        #import pdb
-        #pdb.set_trace()
+
         if opts.test_only:
-            frequency = {}
-            for loader in loaders[:-2]:
-                indices = loader.dataset.label2index
-                for label in indices.keys():
-                    if label != 0:
-                        frequency[label] = indices[label][1] - indices[label][0]
-            with open("data/MAVEN/label2id.json") as fp:
+            # frequency = {}
+            # for loader in loaders[:-2]:
+            #     indices = loader.dataset.label2index
+            #     for label in indices.keys():
+            #         if label != 0:
+            #             frequency[label] = indices[label][1] - indices[label][0]
+            with open(f"data/{opts.datasetname}/label2id.json") as fp:
                 name2label = json.load(fp)
                 label2name = {v:k for k,v in name2label.items()}
+            label2name[0] = "NA"
             id2label = {v:k for k,v in label2id.items()}
-            sf = [(frequency[l], label2name[id2label[l] ], dev_class_f1[l], test_class_f1[l]) for l in frequency]
-            sf.sort(key=lambda t:t[0])
-            print("macro:", sum([t[3] for t in sf]) / len(sf))
+            # sf = [(frequency[l], label2name[id2label[l] ], dev_class_f1[l], test_class_f1[l]) for l in frequency]
+            # sf.sort(key=lambda t:t[0])
+            # print("macro:", sum([t[3] for t in sf]) / len(sf))
+            test_loss, test_metrics = worker.run_one_epoch(
+                    model=model,
+                    f_loss=score_fn,
+                    loader=loaders[-1],
+                    split="test",
+                    collect_stats=collect_stats,
+                    collect_outputs=collect_outputs)
+            test_outputs = {k: torch.cat(v, dim=0) for k,v in worker.epoch_outputs.items()}
+            # torch.save(test_outputs, f"{opts.load_model}/model.output")
+            test_scores, (test_p, test_r, test_f) = by_class(test_outputs["prediction"], test_outputs["label"], learned_labels=learned_labels)
+            
+            assert len(test_outputs["prediction"]) == len(test_outputs["label"]) == len(loaders[-1].dataset)
+            # print(id2label.keys())
+            # print(label2name.keys())
+
+            
+            test_results = []
+            for i in range(len(test_outputs["prediction"])):
+                dp =loaders[-1].dataset[i]
+                rs_dp = {"sentence_id": dp.sentence_id,
+                         "mention_id": dp.mention_id,
+                         "token_ids": dp.token_ids,
+                         "span": dp.span,
+                         "prediction_id": int(test_outputs["prediction"][i]),
+                         "label_id": int(test_outputs["label"][i]),
+                         "prediction_text": label2name[id2label[test_outputs["prediction"][i].item()]],
+                         "label_text": label2name[id2label[test_outputs["label"][i].item()]]}
+                test_results.append(rs_dp)
+            
+            with jsonlines.open(os.path.join(opts.log_dir,'results.jsonl'), mode='w') as writer:
+                writer.write_all(test_results)
+
+
+            test_class_f1 = {k: test_scores[k][2] for k in test_scores}
+            for k,v in test_class_f1.items():
+                add_summary_value(summary, f"test_class_{k}", v, total_epoch)
+            test_metrics = test_f
+            for output_log in [print, worker._log]:
+                output_log(
+                    f"Epoch {worker.epoch:3d}: Test {test_metrics}"
+                )
+            loss_file.writelines(f"Epoch {worker.epoch:3d} Dev {dev_metrics} Test {test_metrics}")
+            loss_file.write('\n')
 
         if not opts.test_only:
             if best_dev is None or dev_metrics > best_dev:
@@ -272,9 +312,6 @@ def main():
                     collect_stats=collect_stats,
                     collect_outputs=collect_outputs)
                 test_outputs = {k: torch.cat(v, dim=0) for k,v in worker.epoch_outputs.items()}
-                # if opts.debug:
-                #     import pdb
-                #     pdb.set_trace()
                 torch.save(test_outputs, f"{opts.load_model}/model.output")
                 test_scores, (test_p, test_r, test_f) = by_class(test_outputs["prediction"], test_outputs["label"], learned_labels=learned_labels)
                 test_class_f1 = {k: test_scores[k][2] for k in test_scores}
